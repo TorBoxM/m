@@ -1,0 +1,82 @@
+[package]
+# Do not change the name of this crate.
+name = "hub"
+version = "10.0.0"
+edition = "2024"
+
+[lib]
+# `lib` is required for non-library targets,
+# such as tests and benchmarks.
+# `cdylib` is for Linux, Android, Windows, and web.
+# `staticlib` is for iOS and macOS.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+wildcard_imports = "deny"
+
+[dependencies]
+rinf = "^8.7.2"
+serde = { version = "^1.0.228", features = ["derive"] }
+serde_json = "^1.0.145"
+serde_yaml_ng = "^0.10.0"
+base64 = "^0.22.1"
+url = "^2.5.7"
+urlencoding = "^2.1.3"
+tokio = { version = "^1.48.0", features = ["rt", "macros", "time", "net", "io-util"] }
+tokio-tungstenite = "^0.28"
+futures-util = "^0.3"
+async-trait = "^0.1.89"
+httparse = "^1.10"
+http = "^1.3"
+log = "^0.4.28"
+env_logger = "^0.11.8"
+once_cell = "^1.21.3"
+chrono = "^0.4.39"
+network-interface = "^2.0.3"
+rand = "^0.9"
+anyhow = "^1.0"
+regex = "^1.12.2"
+webbrowser = "^1.0.6"
+age = { version = "^0.11.3", features = ["armor"] }
+reqwest = { version = "^0.13", default-features = false, features = ["json", "stream", "rustls"] }
+zip = "^7.2"
+flate2 = "^1.1"
+
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+TorBoxService = { path = "../TorBox_service" }
+auto-launch = "^0.6.0"
+rquickjs = "^0.11.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "^0.15.0"
+ndk-context = "^0.1.1"
+jni = { version = "^0.21", default-features = false }
+rustls-platform-verifier = "^0.6"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "^0.31", features = ["signal", "process", "user"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "^0.62.2", features = [
+    "Win32_Networking_WinInet",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_Rras",
+    "Win32_NetworkManagement_WindowsFirewall",
+    "Win32_Security",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Power",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+] }
+encoding_rs = "^0.8.35"
+windows-service = "^0.8"
+
+# Uncomment below to target the web.
+# tokio_with_wasm = { version = "^0.8.5", features = ["rt", "macros", "time"] }
+# wasm-bindgen = "^0.2.100"
