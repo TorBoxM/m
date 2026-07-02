@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=TorBox
+Comment=A proxy client
+Exec=TorBox
+Icon=app_icon
+Terminal=false
+Type=Application
+Categories=Network;Utility;
+Keywords=proxy;vpn;clash;
