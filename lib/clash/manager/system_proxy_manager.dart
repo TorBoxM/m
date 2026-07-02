@@ -1,0 +1,133 @@
+import 'package:TorBox/services/system_proxy_service.dart';
+import 'package:TorBox/storage/clash_preferences.dart';
+import 'package:TorBox/services/log_print_service.dart';
+import 'package:TorBox/services/window_state_service.dart';
+
+// Clash 系统代理管理器
+// 负责系统代理的启用和禁用
+class SystemProxyManager {
+  final bool Function() _isCoreRunning;
+  final int Function() _getHttpPort;
+  final Function() _notifyListeners;
+
+  // 状态变化回调
+  Function(bool)? _onSystemProxyStateChanged;
+
+  // 设置状态变化回调
+  void setOnSystemProxyStateChanged(Function(bool)? handler) {
+    _onSystemProxyStateChanged = handler;
+  }
+
+  bool _isSystemProxyEnabled = false;
+  bool get isSystemProxyEnabled => _isSystemProxyEnabled;
+
+  // 标记当前实例是否真正启用过系统代理（用于多实例场景）
+  bool _hasEnabledSystemProxy = false;
+
+  SystemProxyManager({
+    required bool Function() isCoreRunning,
+    required int Function() getHttpPort,
+    Function()? notifyListeners,
+  }) : _isCoreRunning = isCoreRunning,
+       _getHttpPort = getHttpPort,
+       _notifyListeners = notifyListeners ?? (() {});
+
+  // 重启系统代理（先禁用再启用，应用当前配置）
+  Future<void> restartSystemProxy() async {
+    if (!_isCoreRunning()) {
+      Logger.debug('Clash 未运行，跳过系统代理更新');
+      return;
+    }
+
+    try {
+      final prefs = ClashPreferences.instance;
+      final proxyHost = prefs.getProxyHost();
+      final shouldUsePacMode = prefs.getSystemProxyPacMode();
+      final bypassRules = prefs.getCurrentBypassRules();
+      final bypasses = SystemProxy.parseBypassRules(bypassRules);
+      final pacScript = prefs.getSystemProxyPacScript();
+
+      await SystemProxy.disable();
+
+      await SystemProxy.enable(
+        host: proxyHost,
+        port: _getHttpPort(),
+        bypassDomains: bypasses,
+        usePacMode: shouldUsePacMode,
+        pacScript: pacScript,
+      );
+
+      _hasEnabledSystemProxy = true;
+      await AppWindowListener.setSystemProxyOwnership(true);
+      if (shouldUsePacMode) {
+        Logger.info('系统代理已更新 (PAC 模式)');
+      } else {
+        Logger.info('系统代理已更新：$proxyHost:${_getHttpPort()}');
+      }
+    } catch (e) {
+      Logger.error('更新系统代理失败：$e');
+    }
+  }
+
+  // 启用系统代理（仅代理，核心已运行）
+  Future<bool> enableSystemProxy() async {
+    if (!_isCoreRunning()) {
+      Logger.error('Clash 未运行，无法启用系统代理');
+      return false;
+    }
+
+    try {
+      final prefs = ClashPreferences.instance;
+      final proxyHost = prefs.getProxyHost();
+      final shouldUsePacMode = prefs.getSystemProxyPacMode();
+      final bypassRules = prefs.getCurrentBypassRules();
+      final bypasses = SystemProxy.parseBypassRules(bypassRules);
+      final pacScript = prefs.getSystemProxyPacScript();
+
+      await SystemProxy.enable(
+        host: proxyHost,
+        port: _getHttpPort(),
+        bypassDomains: bypasses,
+        usePacMode: shouldUsePacMode,
+        pacScript: pacScript,
+      );
+
+      _isSystemProxyEnabled = true;
+      _hasEnabledSystemProxy = true;
+      await AppWindowListener.setSystemProxyOwnership(true);
+      _onSystemProxyStateChanged?.call(true);
+      _notifyListeners();
+      return true;
+    } catch (e) {
+      Logger.error('启用系统代理失败：$e');
+      return false;
+    }
+  }
+
+  // 禁用系统代理（仅代理，核心继续运行）
+  Future<bool> disableSystemProxy() async {
+    // 如果当前实例从未启用过系统代理，跳过禁用操作（多实例场景保护）
+    if (!_hasEnabledSystemProxy) {
+      Logger.debug('当前实例未启用过系统代理，跳过禁用操作');
+      if (_isSystemProxyEnabled) {
+        _isSystemProxyEnabled = false;
+        _onSystemProxyStateChanged?.call(false);
+        _notifyListeners();
+      }
+      return true;
+    }
+
+    try {
+      await SystemProxy.disable();
+      _isSystemProxyEnabled = false;
+      _hasEnabledSystemProxy = false;
+      await AppWindowListener.setSystemProxyOwnership(false);
+      _onSystemProxyStateChanged?.call(false);
+      _notifyListeners();
+      return true;
+    } catch (e) {
+      Logger.error('禁用系统代理失败：$e');
+      return false;
+    }
+  }
+}
