@@ -1,0 +1,853 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:TorBox/clash/model/subscription_model.dart';
+import 'package:TorBox/clash/config/clash_defaults.dart';
+import 'package:TorBox/storage/clash_preferences.dart';
+import 'package:TorBox/services/log_print_service.dart';
+import 'package:TorBox/ui/widgets/modern_toast.dart';
+import 'package:TorBox/ui/common/modern_dialog.dart';
+import 'package:TorBox/ui/common/modern_dialog_subs/option_selector.dart';
+import 'package:TorBox/ui/common/modern_dialog_subs/text_input_field.dart';
+import 'package:TorBox/ui/common/modern_dialog_subs/file_selector.dart';
+import 'package:TorBox/ui/common/modern_dialog_subs/proxy_mode_selector.dart';
+import 'package:TorBox/ui/common/modern_dialog_subs/auto_update_mode_selector.dart';
+import 'package:TorBox/i18n/i18n.dart';
+
+// 对话框间距常量
+const double _dialogContentPadding = 20.0;
+const double _dialogItemSpacing = 20.0;
+
+// 订阅导入方式枚举
+enum SubscriptionImportMethod {
+  // 链接导入（远程订阅）
+  link,
+
+  // 本地文件导入
+  localFile,
+}
+
+// 订阅对话框 - 支持添加和编辑两种模式
+// 添加模式可选链接或本地文件导入，编辑模式修改现有配置
+class SubscriptionDialog extends StatefulWidget {
+  final String title;
+  final String? initialName;
+  final String? initialUrl;
+  final AutoUpdateMode? initialAutoUpdateMode;
+  final int? initialIntervalMinutes;
+  final bool? initialUpdateOnStartup;
+  final SubscriptionProxyMode? initialProxyMode;
+  final String? initialUserAgent;
+  final String? initialAgeSecretKey;
+  final bool? initialAutoTestAllDelaysEnabled;
+  final int? initialAutoTestAllDelaysIntervalMinutes;
+  final List<String> initialBuiltinChainProxyNames;
+  final List<String> initialDisabledBuiltinChainProxyNames;
+  final List<CustomChainProxy> initialCustomChainProxies;
+  final String confirmText;
+  final IconData titleIcon;
+  final bool isAddMode;
+  final bool isLocalFile;
+  final Future<bool> Function(SubscriptionDialogResult)? onConfirm;
+
+  const SubscriptionDialog({
+    super.key,
+    required this.title,
+    this.initialName,
+    this.initialUrl,
+    this.initialAutoUpdateMode,
+    this.initialIntervalMinutes,
+    this.initialUpdateOnStartup,
+    this.initialProxyMode,
+    this.initialUserAgent,
+    this.initialAgeSecretKey,
+    this.initialAutoTestAllDelaysEnabled,
+    this.initialAutoTestAllDelaysIntervalMinutes,
+    this.initialBuiltinChainProxyNames = const [],
+    this.initialDisabledBuiltinChainProxyNames = const [],
+    this.initialCustomChainProxies = const [],
+    this.confirmText = 'Confirm',
+    this.titleIcon = Icons.rss_feed,
+    this.isAddMode = false,
+    this.isLocalFile = false,
+    this.onConfirm,
+  });
+
+  // 显示添加配置对话框
+  static Future<void> showAddDialog(
+    BuildContext context, {
+    required Future<bool> Function(SubscriptionDialogResult) onConfirm,
+  }) {
+    final trans = context.translate;
+
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => SubscriptionDialog(
+        title: trans.subscription_dialog.add_title,
+        confirmText: trans.subscription_dialog.add_button,
+        titleIcon: Icons.add_circle_outline,
+        isAddMode: true, // 标记为添加模式
+        onConfirm: onConfirm,
+      ),
+    );
+  }
+
+  // 显示编辑订阅对话框
+  static Future<SubscriptionDialogResult?> showEditDialog(
+    BuildContext context,
+    Subscription subscription,
+  ) {
+    final trans = context.translate;
+
+    return showDialog<SubscriptionDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => SubscriptionDialog(
+        title: trans.subscription_dialog.edit_title,
+        initialName: subscription.name,
+        initialUrl: subscription.url,
+        initialAutoUpdateMode: subscription.autoUpdateMode,
+        initialIntervalMinutes: subscription.intervalMinutes,
+        initialUpdateOnStartup: subscription.shouldUpdateOnStartup,
+        initialProxyMode: subscription.proxyMode,
+        initialUserAgent: subscription.userAgent,
+        initialAgeSecretKey: subscription.ageSecretKey,
+        initialAutoTestAllDelaysEnabled: subscription.autoTestAllDelaysEnabled,
+        initialAutoTestAllDelaysIntervalMinutes:
+            subscription.autoTestAllDelaysIntervalMinutes,
+        initialBuiltinChainProxyNames: subscription.builtinChainProxyNames,
+        initialDisabledBuiltinChainProxyNames:
+            subscription.disabledBuiltinChainProxyNames,
+        initialCustomChainProxies: subscription.customChainProxies,
+        confirmText: trans.subscription_dialog.save_button,
+        titleIcon: Icons.edit_outlined,
+        isLocalFile: subscription.isLocalFile,
+      ),
+    );
+  }
+
+  @override
+  State<SubscriptionDialog> createState() => _SubscriptionDialogState();
+}
+
+class _SubscriptionDialogState extends State<SubscriptionDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _urlController;
+  late final TextEditingController _intervalController;
+  late final TextEditingController _autoDelayTestIntervalController;
+  late final TextEditingController _userAgentController;
+  late final TextEditingController _ageSecretKeyController;
+  late final FocusNode _autoDelayTestIntervalFocusNode;
+  late int _autoDelayTestIntervalMinutes;
+  late AutoUpdateMode _autoUpdateMode;
+  late SubscriptionProxyMode _proxyMode;
+  late List<String> _builtinChainProxyNames;
+  late List<String> _disabledBuiltinChainProxyNames;
+  late List<CustomChainProxy> _customChainProxies;
+
+  // 缓存的全局默认 UA，避免重复调用
+  late final String _defaultUserAgent;
+
+  // 导入方式选择
+  SubscriptionImportMethod _importMethod = SubscriptionImportMethod.link;
+
+  // 选中的文件信息
+  FileSelectionResult? _selectedFile;
+
+  final _formKey = GlobalKey<FormState>();
+  bool _isLoading = false;
+  bool _didSyncAutoDelayTestIntervalDisplay = false;
+
+  // 重建延迟标志，避免输入时频繁重建
+  bool _needsRebuild = false;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // 缓存全局默认 UA，避免重复调用
+    _defaultUserAgent = ClashPreferences.instance.getDefaultUserAgent();
+
+    // 初始化控制器
+    _nameController = TextEditingController(text: widget.initialName ?? '');
+    _urlController = TextEditingController(text: widget.initialUrl ?? '');
+    _intervalController = TextEditingController(
+      text: (widget.initialIntervalMinutes ?? 60).toString(),
+    );
+    _autoDelayTestIntervalMinutes =
+        widget.initialAutoTestAllDelaysEnabled ?? false
+        ? (widget.initialAutoTestAllDelaysIntervalMinutes ?? 10)
+        : 0;
+    _autoDelayTestIntervalController = TextEditingController(
+      text: _autoDelayTestIntervalMinutes.toString(),
+    );
+    _autoDelayTestIntervalFocusNode = FocusNode();
+    // 编辑模式：使用订阅的 UA；添加模式：留空（使用 placeholder 显示默认值）
+    _userAgentController = TextEditingController(
+      text: widget.initialUserAgent ?? '',
+    );
+    _ageSecretKeyController = TextEditingController(
+      text: widget.initialAgeSecretKey ?? '',
+    );
+
+    // 初始化自动更新模式和代理模式
+    _autoUpdateMode = widget.initialAutoUpdateMode ?? AutoUpdateMode.disabled;
+    _proxyMode = widget.initialProxyMode ?? SubscriptionProxyMode.direct;
+    _builtinChainProxyNames = List<String>.from(
+      widget.initialBuiltinChainProxyNames,
+    );
+    _disabledBuiltinChainProxyNames = List<String>.from(
+      widget.initialDisabledBuiltinChainProxyNames,
+    );
+    _customChainProxies = List<CustomChainProxy>.from(
+      widget.initialCustomChainProxies,
+    );
+
+    // 添加监听器以检测内容变化
+    _nameController.addListener(_checkForChanges);
+    _urlController.addListener(_checkForChanges);
+    _intervalController.addListener(_checkForChanges);
+    _autoDelayTestIntervalController.addListener(_checkForChanges);
+    _autoDelayTestIntervalController.addListener(
+      _handleAutoDelayTestIntervalChanged,
+    );
+    _userAgentController.addListener(_checkForChanges);
+    _ageSecretKeyController.addListener(_checkForChanges);
+    _autoDelayTestIntervalFocusNode.addListener(
+      _handleAutoDelayTestFocusChanged,
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didSyncAutoDelayTestIntervalDisplay) {
+      return;
+    }
+
+    _didSyncAutoDelayTestIntervalDisplay = true;
+    _syncAutoDelayTestIntervalDisplay();
+  }
+
+  // 检查内容是否发生变化
+  bool get _hasChanges {
+    if (widget.isAddMode) return true;
+
+    if (_nameController.text.trim() != (widget.initialName ?? '')) return true;
+
+    if (!widget.isLocalFile) {
+      if (_urlController.text.trim() != (widget.initialUrl ?? '')) return true;
+
+      if (_autoUpdateMode !=
+          (widget.initialAutoUpdateMode ?? AutoUpdateMode.disabled)) {
+        return true;
+      }
+
+      if (_autoUpdateMode == AutoUpdateMode.interval &&
+          int.tryParse(_intervalController.text.trim()) !=
+              (widget.initialIntervalMinutes ?? 60)) {
+        return true;
+      }
+
+      if (_proxyMode !=
+          (widget.initialProxyMode ?? SubscriptionProxyMode.direct)) {
+        return true;
+      }
+
+      // 比较 UA 变化：空值视为默认值
+      final currentUA = _userAgentController.text.trim();
+      final initialUA = widget.initialUserAgent ?? '';
+      if (currentUA != initialUA) {
+        return true;
+      }
+
+      final currentAgeSecretKey = _ageSecretKeyController.text.trim();
+      final initialAgeSecretKey = widget.initialAgeSecretKey ?? '';
+      if (currentAgeSecretKey != initialAgeSecretKey) {
+        return true;
+      }
+    }
+
+    final initialAutoDelayTestIntervalMinutes =
+        widget.initialAutoTestAllDelaysEnabled ?? false
+        ? (widget.initialAutoTestAllDelaysIntervalMinutes ?? 10)
+        : 0;
+    if (_autoDelayTestIntervalMinutes != initialAutoDelayTestIntervalMinutes) {
+      return true;
+    }
+
+    if (_builtinChainProxyNames.length !=
+        widget.initialBuiltinChainProxyNames.length) {
+      return true;
+    }
+    if (_disabledBuiltinChainProxyNames.length !=
+        widget.initialDisabledBuiltinChainProxyNames.length) {
+      return true;
+    }
+    for (var i = 0; i < _disabledBuiltinChainProxyNames.length; i++) {
+      if (_disabledBuiltinChainProxyNames[i] !=
+          widget.initialDisabledBuiltinChainProxyNames[i]) {
+        return true;
+      }
+    }
+    if (_customChainProxies.length != widget.initialCustomChainProxies.length) {
+      return true;
+    }
+    for (var i = 0; i < _customChainProxies.length; i++) {
+      final current = _customChainProxies[i];
+      final initial = widget.initialCustomChainProxies[i];
+      if (current.id != initial.id ||
+          current.displayName != initial.displayName ||
+          current.nodeNames.length != initial.nodeNames.length) {
+        return true;
+      }
+      for (var i = 0; i < current.nodeNames.length; i++) {
+        if (current.nodeNames[i] != initial.nodeNames[i]) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  int? _parseAutoDelayTestIntervalValue(String rawValue) {
+    if (rawValue.isEmpty) {
+      return 0;
+    }
+
+    if (rawValue ==
+        context
+            .translate
+            .subscription_dialog
+            .auto_delay_test_interval_disabled) {
+      return 0;
+    }
+
+    return int.tryParse(rawValue);
+  }
+
+  void _handleAutoDelayTestIntervalChanged() {
+    final minutes = _parseAutoDelayTestIntervalValue(
+      _autoDelayTestIntervalController.text.trim(),
+    );
+    if (minutes == null || minutes == _autoDelayTestIntervalMinutes) {
+      return;
+    }
+
+    _autoDelayTestIntervalMinutes = minutes;
+  }
+
+  void _handleAutoDelayTestFocusChanged() {
+    _syncAutoDelayTestIntervalDisplay();
+  }
+
+  void _syncAutoDelayTestIntervalDisplay() {
+    final nextText = _autoDelayTestIntervalFocusNode.hasFocus
+        ? (_autoDelayTestIntervalMinutes == 0
+              ? ''
+              : _autoDelayTestIntervalMinutes.toString())
+        : (_autoDelayTestIntervalMinutes == 0
+              ? context
+                    .translate
+                    .subscription_dialog
+                    .auto_delay_test_interval_disabled
+              : _autoDelayTestIntervalMinutes.toString());
+
+    if (_autoDelayTestIntervalController.text == nextText) {
+      return;
+    }
+
+    _autoDelayTestIntervalController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: nextText.length),
+    );
+  }
+
+  // 内容变化时标记需要重建，延迟到下一帧执行
+  void _checkForChanges() {
+    if (!_needsRebuild) {
+      _needsRebuild = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _needsRebuild) {
+          setState(() {
+            _needsRebuild = false;
+          });
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    // 移除监听器
+    _nameController.removeListener(_checkForChanges);
+    _urlController.removeListener(_checkForChanges);
+    _intervalController.removeListener(_checkForChanges);
+    _autoDelayTestIntervalController.removeListener(_checkForChanges);
+    _autoDelayTestIntervalController.removeListener(
+      _handleAutoDelayTestIntervalChanged,
+    );
+    _userAgentController.removeListener(_checkForChanges);
+    _ageSecretKeyController.removeListener(_checkForChanges);
+    _autoDelayTestIntervalFocusNode.removeListener(
+      _handleAutoDelayTestFocusChanged,
+    );
+    // 释放控制器
+    _nameController.dispose();
+    _urlController.dispose();
+    _intervalController.dispose();
+    _autoDelayTestIntervalController.dispose();
+    _userAgentController.dispose();
+    _ageSecretKeyController.dispose();
+    _autoDelayTestIntervalFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final trans = context.translate;
+
+    return ModernDialog(
+      title: widget.title,
+      titleIcon: widget.titleIcon,
+      isModified: !widget.isAddMode && _hasChanges,
+      maxWidth: 720,
+      maxHeightRatio: 0.85,
+      content: _buildContent(),
+      actionsLeft: Text(
+        widget.isAddMode
+            ? trans.subscription_dialog.add_mode_hint
+            : trans.subscription_dialog.edit_mode_hint,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+        ),
+      ),
+      actionsRight: [
+        DialogActionButton(
+          key: const ValueKey('subscription_dialog_cancel_button'),
+          label: trans.subscription_dialog.cancel_button,
+          isPrimary: false,
+          onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
+        ),
+        DialogActionButton(
+          key: const ValueKey('subscription_dialog_confirm_button'),
+          label: widget.confirmText,
+          isPrimary: true,
+          isLoading: _isLoading,
+          onPressed: (_isLoading || !_hasChanges) ? null : _handleConfirm,
+        ),
+      ],
+      onClose: _isLoading ? null : () => Navigator.of(context).pop(),
+    );
+  }
+
+  Widget _buildContent() {
+    final trans = context.translate;
+    final shouldShowRemoteFields =
+        (widget.isAddMode && _importMethod == SubscriptionImportMethod.link) ||
+        (!widget.isAddMode && !widget.isLocalFile);
+    final shouldShowLocalFileSelector =
+        widget.isAddMode && _importMethod == SubscriptionImportMethod.localFile;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(_dialogContentPadding),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 如果是添加模式，显示导入方式选择
+            if (widget.isAddMode) ...[
+              _buildImportModeSelector(),
+              const SizedBox(height: _dialogItemSpacing),
+            ],
+
+            TextInputField(
+              key: const ValueKey('subscription_dialog_name_field'),
+              controller: _nameController,
+              label: trans.subscription_dialog.config_name_label,
+              hint: trans.subscription_dialog.config_name_hint,
+              icon: Icons.label_outline,
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return trans.subscription_dialog.config_name_error;
+                }
+                return null;
+              },
+            ),
+
+            // 根据导入方式选择输入控件。
+            // 编辑本地文件订阅时隐藏 URL 字段。
+            if (shouldShowRemoteFields) ...[
+              const SizedBox(height: _dialogItemSpacing),
+              TextInputField(
+                key: const ValueKey('subscription_dialog_url_field'),
+                controller: _urlController,
+                label: trans.subscription_dialog.subscription_link_label,
+                hint: trans.subscription_dialog.subscription_link_hint,
+                icon: Icons.link,
+                minLines: 1,
+                maxLines: null,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return trans.subscription_dialog.link_error;
+                  }
+
+                  final uri = Uri.tryParse(value.trim());
+                  if (uri == null) {
+                    return trans.subscription_dialog.link_format_error;
+                  }
+
+                  if (uri.scheme != 'http' && uri.scheme != 'https') {
+                    return context
+                        .translate
+                        .subscription_dialog
+                        .link_protocol_error;
+                  }
+
+                  if (uri.host.isEmpty) {
+                    return trans.subscription_dialog.link_missing_host;
+                  }
+
+                  // 验证域名格式：必须包含点，或者是 localhost/IP
+                  final host = uri.host.toLowerCase();
+                  if (host != 'localhost' &&
+                      host != '127.0.0.1' &&
+                      !host.contains('.')) {
+                    return context
+                        .translate
+                        .subscription_dialog
+                        .link_host_format_error;
+                  }
+
+                  if (host.length < 3) {
+                    return context
+                        .translate
+                        .subscription_dialog
+                        .link_host_too_short;
+                  }
+
+                  return null;
+                },
+              ),
+              const SizedBox(height: _dialogItemSpacing),
+              _buildUserAgentField(),
+              const SizedBox(height: _dialogItemSpacing),
+              _buildAgeSecretKeyField(),
+            ] else if (shouldShowLocalFileSelector) ...[
+              const SizedBox(height: _dialogItemSpacing),
+              _buildFileSelector(),
+            ],
+
+            const SizedBox(height: _dialogItemSpacing),
+            _buildAutoTestAllDelaysSection(),
+
+            // 自动更新仅在链接导入场景显示。
+            // 编辑模式下，本地文件订阅不显示该区域。
+            if (shouldShowRemoteFields) ...[
+              const SizedBox(height: _dialogItemSpacing),
+              _buildAutoUpdateSection(),
+              const SizedBox(height: _dialogItemSpacing),
+              _buildProxyModeSection(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAutoUpdateSection() {
+    final dialogTrans = context.translate.subscription_dialog;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 自动更新模式选择器
+        AutoUpdateModeSelector(
+          selectedValue: _autoUpdateMode,
+          onChanged: (value) {
+            setState(() => _autoUpdateMode = value);
+          },
+        ),
+
+        // 间隔更新配置（当选择间隔更新时展开）
+        if (_autoUpdateMode == AutoUpdateMode.interval) ...[
+          const SizedBox(height: 16),
+          TextInputField(
+            key: const ValueKey('subscription_dialog_update_interval_field'),
+            controller: _intervalController,
+            label: dialogTrans.update_interval_label,
+            hint: dialogTrans.update_interval_hint,
+            icon: Icons.schedule,
+            validator: (value) {
+              if (_autoUpdateMode == AutoUpdateMode.interval) {
+                final minutes = int.tryParse(value?.trim() ?? '');
+                if (minutes == null || minutes < 1) {
+                  return dialogTrans.update_interval_error;
+                }
+              }
+              return null;
+            },
+          ),
+        ],
+      ],
+    );
+  }
+
+  // 构建代理模式选择区域
+  Widget _buildProxyModeSection() {
+    return ProxyModeSelector(
+      selectedValue: _proxyMode,
+      onChanged: (value) {
+        setState(() => _proxyMode = value);
+      },
+    );
+  }
+
+  Widget _buildAutoTestAllDelaysSection() {
+    final dialogTrans = context.translate.subscription_dialog;
+
+    return TextInputField(
+      key: const ValueKey('subscription_auto_test_all_delays_interval_field'),
+      controller: _autoDelayTestIntervalController,
+      focusNode: _autoDelayTestIntervalFocusNode,
+      onTap: () {
+        if (_autoDelayTestIntervalMinutes == 0) {
+          _autoDelayTestIntervalController.clear();
+        }
+      },
+      label: dialogTrans.auto_delay_test_interval_label,
+      hint: dialogTrans.auto_delay_test_interval_hint,
+      icon: Icons.schedule,
+      keyboardType: TextInputType.number,
+      inputFormatters: [
+        TextInputFormatter.withFunction((oldValue, newValue) {
+          final isValidInput = RegExp(r'^\d*$').hasMatch(newValue.text);
+          return isValidInput ? newValue : oldValue;
+        }),
+      ],
+      validator: (value) {
+        final minutes = _parseAutoDelayTestIntervalValue(value?.trim() ?? '');
+        if (minutes == null || minutes < 0) {
+          return dialogTrans.auto_delay_test_interval_error;
+        }
+        return null;
+      },
+    );
+  }
+
+  // 构建 User-Agent 输入字段
+  Widget _buildUserAgentField() {
+    final dialogTrans = context.translate.subscription_dialog;
+    return TextInputField(
+      controller: _userAgentController,
+      label: 'User-Agent',
+      hint:
+          '${dialogTrans.user_agent_default}: ${ClashDefaults.defaultUserAgent}',
+      icon: Icons.badge,
+    );
+  }
+
+  Widget _buildAgeSecretKeyField() {
+    final dialogTrans = context.translate.subscription_dialog;
+    return TextInputField(
+      controller: _ageSecretKeyController,
+      label: dialogTrans.age_secret_key_label,
+      hint: dialogTrans.age_secret_key_hint,
+      icon: Icons.key,
+      shouldObscureText: true,
+    );
+  }
+
+  // 构建导入方式选择器
+  Widget _buildImportModeSelector() {
+    final dialogTrans = context.translate.subscription_dialog;
+
+    return OptionSelectorWidget<SubscriptionImportMethod>(
+      itemKeyPrefix: 'subscription_dialog_import_method',
+      title: dialogTrans.import_method_title,
+      titleIcon: Icons.import_export,
+      isHorizontal: !DialogConstants.isMobile,
+      options: [
+        OptionItem(
+          value: SubscriptionImportMethod.link,
+          title: dialogTrans.import_link,
+        ),
+        OptionItem(
+          value: SubscriptionImportMethod.localFile,
+          title: dialogTrans.import_local,
+        ),
+      ],
+      selectedValue: _importMethod,
+      onChanged: (value) {
+        setState(() {
+          _importMethod = value;
+          // 本地文件导入时默认禁用自动更新
+          if (value == SubscriptionImportMethod.localFile) {
+            _autoUpdateMode = AutoUpdateMode.disabled;
+          } else if (_autoUpdateMode == AutoUpdateMode.disabled) {
+            // 链接导入时如果当前是禁用状态，切换为间隔更新
+            _autoUpdateMode = AutoUpdateMode.interval;
+          }
+        });
+      },
+    );
+  }
+
+  // 构建文件选择器
+  Widget _buildFileSelector() {
+    final dialogTrans = context.translate.subscription_dialog;
+
+    return FileSelectorWidget(
+      dropZoneKey: const ValueKey('subscription_dialog_file_selector'),
+      onFileSelected: (result) {
+        setState(() {
+          _selectedFile = result;
+        });
+      },
+      initialFile: _selectedFile,
+      hintText: dialogTrans.select_file_label,
+      selectedText: dialogTrans.file_selected_label,
+      draggingText: dialogTrans.drop_to_import,
+      dragHintText: dialogTrans.click_or_drag,
+    );
+  }
+
+  void _handleConfirm() async {
+    final trans = context.translate;
+
+    // 验证表单
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    // 验证本地导入时是否选择了文件
+    if (_importMethod == SubscriptionImportMethod.localFile &&
+        _selectedFile == null) {
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 获取 UA 值，如果为空则使用默认值
+      final userAgent = _userAgentController.text.trim();
+      final ageSecretKey = _ageSecretKeyController.text.trim();
+      final result = SubscriptionDialogResult(
+        name: _nameController.text.trim(),
+        url: _importMethod == SubscriptionImportMethod.link
+            ? _urlController.text.trim()
+            : null,
+        autoUpdateMode: _autoUpdateMode,
+        intervalMinutes: int.tryParse(_intervalController.text.trim()) ?? 60,
+        shouldUpdateOnStartup: _autoUpdateMode == AutoUpdateMode.onStartup,
+        isLocalImport: _importMethod == SubscriptionImportMethod.localFile,
+        localFilePath: _selectedFile?.file.path,
+        proxyMode: _proxyMode,
+        userAgent: userAgent.isEmpty ? _defaultUserAgent : userAgent,
+        ageSecretKey: ageSecretKey,
+        autoTestAllDelaysIntervalMinutes: _autoDelayTestIntervalMinutes,
+        autoTestAllDelaysEnabled: _autoDelayTestIntervalMinutes > 0,
+        builtinChainProxyNames: _builtinChainProxyNames,
+        disabledBuiltinChainProxyNames: _disabledBuiltinChainProxyNames,
+        customChainProxies: _customChainProxies,
+      );
+
+      // 如果有确认回调，调用它并等待结果
+      if (widget.onConfirm != null) {
+        bool success = false;
+        String? errorMessage;
+
+        try {
+          success = await widget.onConfirm!(result);
+        } catch (e) {
+          success = false;
+          errorMessage = e.toString();
+          Logger.error('订阅操作异常: $e');
+        }
+
+        if (!mounted) return;
+
+        if (success) {
+          // 成功，关闭对话框
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
+        } else {
+          // 失败，停止加载状态，保持对话框打开
+          setState(() => _isLoading = false);
+
+          // 显示错误提示
+          if (mounted) {
+            final defaultErrorMessage =
+                _importMethod == SubscriptionImportMethod.localFile
+                ? trans.subscription_dialog.local_import_failed
+                : trans.subscription_dialog.remote_import_failed;
+
+            ModernToast.error(errorMessage ?? defaultErrorMessage);
+          }
+        }
+      } else {
+        // 没有回调，直接返回结果（编辑模式）
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (mounted) {
+          ModernToast.success(trans.subscription_dialog.save_success);
+          Navigator.of(context).pop(result);
+        }
+      }
+    } catch (e) {
+      Logger.error('对话框确认操作异常: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ModernToast.error(
+          trans.subscription_dialog.operation_error.replaceAll(
+            '{error}',
+            e.toString(),
+          ),
+        );
+      }
+    }
+  }
+}
+
+// 订阅对话框结果
+class SubscriptionDialogResult {
+  final String name;
+  final String? url;
+  final AutoUpdateMode autoUpdateMode;
+  final int intervalMinutes;
+  final bool shouldUpdateOnStartup;
+  final bool isLocalImport;
+  final String? localFilePath;
+  final SubscriptionProxyMode proxyMode;
+  final String userAgent;
+  final String ageSecretKey;
+  final bool autoTestAllDelaysEnabled;
+  final int autoTestAllDelaysIntervalMinutes;
+  final List<String> builtinChainProxyNames;
+  final List<String> disabledBuiltinChainProxyNames;
+  final List<CustomChainProxy> customChainProxies;
+
+  const SubscriptionDialogResult({
+    required this.name,
+    this.url,
+    required this.autoUpdateMode,
+    this.intervalMinutes = 60,
+    this.shouldUpdateOnStartup = false,
+    this.isLocalImport = false,
+    this.localFilePath,
+    this.proxyMode = SubscriptionProxyMode.direct,
+    String? userAgent,
+    this.ageSecretKey = '',
+    this.autoTestAllDelaysEnabled = false,
+    this.autoTestAllDelaysIntervalMinutes = 10,
+    this.builtinChainProxyNames = const [],
+    this.disabledBuiltinChainProxyNames = const [],
+    this.customChainProxies = const [],
+  }) : userAgent = userAgent ?? ClashDefaults.defaultUserAgent;
+}
