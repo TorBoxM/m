@@ -1,0 +1,22 @@
+# 这个文件用于配置 Dart 分析器（analyzer），它会对 Dart 代码进行静态分析，
+# 检查错误（errors）、警告（warnings）和代码规范（lints）。
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # 将 unused_element_parameter（未使用的函数参数）从警告/错误降级为忽略
+    unused_element_parameter: ignore
+
+  exclude:
+    # 排除自动生成文件的 lint 检查（不会影响编译错误）
+    - lib/utils/i18n.dart
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - lib/src/bindings/**
+    - lib/i18n/**
+    - build/**
+    - scripts/**
+
+
+linter:
+  rules:

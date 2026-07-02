@@ -1,0 +1,12 @@
+# scripts 子项目的分析配置
+# 这是一个独立的纯 Dart 项目，不需要 Flutter 相关的 lints
+
+include: package:lints/recommended.yaml
+
+analyzer:
+  errors:
+    unused_element_parameter: ignore
+
+linter:
+  rules:
+    # 基础规则已由 lints/recommended.yaml 提供
