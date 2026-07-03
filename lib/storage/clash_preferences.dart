@@ -400,7 +400,7 @@ class ClashPreferences {
   Future<void> setTunStack(String stack) => _setString(_kTunStack, stack);
 
   // 获取虚拟网卡设备名称
-  String getTunDevice() => _getString(_kTunDevice, 'Mihomo');
+  String getTunDevice() => _getString(_kTunDevice, 'mihomo');
 
   // 保存虚拟网卡设备名称
   Future<void> setTunDevice(String device) => _setString(_kTunDevice, device);
