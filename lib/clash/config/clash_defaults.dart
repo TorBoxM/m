@@ -39,7 +39,7 @@ class ClashDefaults {
   static const String defaultOutboundMode =
       'rule'; // 默认出站模式（rule/global/direct）
   static const int defaultKeepAliveInterval = 30; // TCP Keep-Alive 间隔（s）
-  static const String defaultUserAgent = 'clash.meta'; // 默认 User-Agent
+  static const String defaultUserAgent = 'mihomo'; // 默认 User-Agent
 
   // ==================== TUN 配置默认值 ====================
   static const String defaultGeodataLoader = 'memconservative'; // GEO 数据加载模式
@@ -47,7 +47,7 @@ class ClashDefaults {
       'off'; // 查找进程模式（off/strict/always）
   static const String defaultTunStack =
       'mixed'; // TUN 网络栈类型（system/gvisor/mixed）
-  static const String defaultTunDevice = 'Mihomo'; // TUN 虚拟网卡名称
+  static const String defaultTunDevice = 'mihomo'; // TUN 虚拟网卡名称
   static const List<String> defaultTunDnsHijack = ['any:53']; // DNS 劫持规则
   static const int defaultTunMtu = 1500; // TUN MTU 值
 
