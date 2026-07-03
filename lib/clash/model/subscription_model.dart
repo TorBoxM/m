@@ -192,7 +192,7 @@ class Subscription {
   final List<String> overrideIds; // 规则覆写 ID 列表（已选中的）
   final List<String> overrideSortPreferences; // 规则覆写排序偏好（完整顺序，包括未选中的）
   final List<String> failedOverrideIds; // 失败的覆写 ID 列表(启动失败时记录)
-  final String userAgent; // User-Agent（仅远程订阅有效，默认为 clash.meta）
+  final String userAgent; // User-Agent（仅远程订阅有效，默认为mihomo）
   final String ageSecretKey; // age 加密订阅解密私钥
   final bool hasConfigLoadFailed; // 配置加载失败标记（用于 UI 显示警告）
   final bool autoTestAllDelaysEnabled; // 是否启用自动测试全部延迟
