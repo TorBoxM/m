@@ -47,7 +47,7 @@ class ClashDefaults {
       'off'; // 查找进程模式（off/strict/always）
   static const String defaultTunStack =
       'mixed'; // TUN 网络栈类型（system/gvisor/mixed）
-  static const String defaultTunDevice = 'mihomo'; // TUN 虚拟网卡名称
+  static const String defaultTunDevice = 'Mihomo'; // TUN 虚拟网卡名称
   static const List<String> defaultTunDnsHijack = ['any:53']; // DNS 劫持规则
   static const int defaultTunMtu = 1500; // TUN MTU 值
 
